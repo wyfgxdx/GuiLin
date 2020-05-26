@@ -1,14 +1,20 @@
+import gevent
+from gevent import monkey
+monkey.patch_all()
+from gevent.queue import Queue
 import requests
 import json
 import time,random,os,sys
+sys.setrecursionlimit(1000000)
 import openpyxl
 import socket
 import urllib3
 import quopri
 import datetime
+import string
 from bs4 import BeautifulSoup
 
-global CurrDat
+global CurrDat,savetel
 CurrTime =  datetime.datetime.now()
 CurrDate = str(CurrTime.year)+str(CurrTime.month)+str(CurrTime.day)
 ContactsList = []
@@ -30,16 +36,15 @@ class Contacts():
     #设置联系人姓名
         self.name = name
 
-socket.setdefaulttimeout(20)  # 设置socket层的超时时间为20秒
+socket.setdefaulttimeout(30)  # 设置socket层的超时时间为20秒
 baidu_url = 'https://map.baidu.com/'
 baidu_headers = {
         'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.100 Safari/537.36'
         
 }
 
-def getCurrCity():
-    StartLocation =  input('请输入搜索区域：')
-    SearchType = input('请输入搜索类型：')
+def getCurrCity(StartLocation,SearchType):
+    
     ParamsSearchCityCode = {
 
     }
@@ -118,6 +123,7 @@ def chahao(SearchPhone):
     IspInfo = IspProvince+IspCity+IspType
     time.sleep(3)
     return IspInfo
+    
 
 def saveExcel(ContactsList,StartLocation,SearchType):
     wb = openpyxl.Workbook()
@@ -126,8 +132,10 @@ def saveExcel(ContactsList,StartLocation,SearchType):
     sheet['B1']='联系方式'
     sheet['C1']='地址'
     for item in ContactsList:
+        if item.phone == None:
+            continue
         sheet.append([item.name,item.phone,item.addr]) 
-    ExcelPath = path + '\\' + CurrDate + SearchParams[2] + SearchParams[3] + '.xlsx'               
+    ExcelPath = path + '\\' + CurrDate + StartLocation + SearchType + '.xlsx'               
     wb.save(ExcelPath)
     print(ExcelPath + '已经处理完成')
     pass
@@ -139,9 +147,33 @@ def make_vcf_file(a):
         
         name = Contact.name
         if Contact.phone == None:
-            tel = 'None'
-        else:
-            tel = '' + Contact.phone
+            continue
+        elif savetel == '1':
+            if Contact.phone.count(',') == 1 :
+                Tel = Contact.phone.split(',')
+                tel1 = Tel[0]
+                tel2 = Tel[1]
+                tel = '' + tel1 +  '''
+TEL;CELL:'''+tel2
+            else:
+                tel = Contact.phone
+        elif savetel != '1':
+            if Contact.phone.count(',') ==1:
+                Tel = Contact.phone.split(',')
+                tel1 = Tel[0]
+                tel2 = Tel[1]
+                if tel1.count('(') == 1:
+                    tel1 = ''
+                if tel2.count('(') == 1:
+                    tel2 = ''
+                tel = '' + tel1 +  '''
+TEL;CELL:'''+tel2 
+            else:
+                if Contact.phone.count('(')==1:
+                    continue
+                else:
+                    tel = Contact.phone
+                    
         name = quopri.encodestring(name.encode())
         s = '''BEGIN:VCARD
 VERSION:2.1
@@ -209,7 +241,7 @@ def getPhone(UidStart,CurrCityCode,StartLocation,SearchType):
         if(pos_json == None):
             break
         else:
-                ListLength = len(pos_json['content'])
+            ListLength = len(pos_json['content'])
         
         for i in range(len(pos_json['content'])-1):
             
@@ -237,12 +269,24 @@ def getPhone(UidStart,CurrCityCode,StartLocation,SearchType):
                     continue
                 JsonDetail =  ResDetail.json()
                 
-                DetailName =  CurrDate + JsonDetail['content']['name']
+                DetailName =  CurrDate + StartLocation + JsonDetail['content']['name']
                 DetailPhone = JsonDetail['content']['phone']
                 DetailAddr = JsonDetail['content']['addr']
                 if DetailPhone !=  None and len(DetailPhone) ==11:
                     DetailName = chahao(DetailPhone) + DetailName
-                 
+                elif DetailPhone !=  None and len(DetailPhone) == 23:
+                    Tel = DetailPhone.split(',')
+                    tel1 = Tel[0]
+                    tel2 = Tel[1]
+                    DetailName = chahao(tel1) + chahao(tel2) + DetailName
+                elif DetailPhone !=  None and DetailPhone.count('(') == 1 and DetailPhone.count(',') == 1:
+                    Tel = DetailPhone.split(',')
+                    tel1 = Tel[0]
+                    tel2 = Tel[1]
+                    if tel1[0] == '(':
+                        DetailName = chahao(tel2) + DetailName
+                    elif tel2[0] == '(':
+                        DetailName = chahao(tel1) +DetailName
                 Contact =  Contacts(DetailName,DetailPhone,DetailAddr)
                 ContactsList.append(Contact)
                 print(DetailPhone)
@@ -265,22 +309,53 @@ def getPhone(UidStart,CurrCityCode,StartLocation,SearchType):
         
     return ContactsList
 
-if __name__ == '__main__':
-    
-    print('欢迎使用一键通讯录导入功能，导入手机通讯录非常方便！')
-  
-    SearchParams=getCurrCity()
+def OneTask(StartLocation,SearchType):
+
+    #根据输入的地点和信息类型，输出第一个地点的UID，城市代码，搜索地域，搜索类型
+    SearchParams=getCurrCity(StartLocation,SearchType)
     print('下面是搜索参数列表')
     print(SearchParams)
     print('\n')
+    #ContactSList是根据输入的一个地点和类型输出所有相关的电话信息。
     ContactsList = getPhone(SearchParams[0],SearchParams[1],SearchParams[2],SearchParams[3])
     
-    saveExcel(ContactsList,SearchParams[2],SearchParams[3])
+    
+if __name__ == '__main__':
+    print('欢迎使用一键通讯录导入功能，导入手机通讯录非常方便！')
+ 
+    SearchParams = []
+    while(True):
+        StartLocation =  input('请输入搜索区域,键入stop停止输入：')
+        if(StartLocation == 'stop' ):
+            break
+        SearchType = input('请输入搜索类型，键入stop停止输入：')
+        if(SearchType == 'stop'):
+            break
+        SearchParams.append([StartLocation,SearchType])
+    savetel = input('输入1保存固定电话号码到通讯录，输入其他不保存：')
+    work = Queue()
+    for item in SearchParams:
+        work.put_nowait(item)
+
+    def crawler():
+        while not work.empty():
+            SearchParam = work.get_nowait()
+            OneTask(SearchParam[0],SearchParam[1])
+    
+    TaskLists = []
+    for x in range(2):
+        task =  gevent.spawn(crawler)
+        TaskLists.append(task)
+    gevent.joinall(TaskLists)
+
+    saveExcel(ContactsList,SearchParams[0][0],SearchParams[0][1])
     VcfData = make_vcf_file(ContactsList)
     
-    VcfPath = path + '\\' + CurrDate + SearchParams[2] + SearchParams[3] + '.vcf' 
+    VcfPath = path + '\\' + CurrDate + SearchParams[0][0] + SearchParams[0][1] + '.vcf' 
     with open(VcfPath,'w') as fileObject:
         fileObject.write(data)  
         fileObject.write('\n') 
         fileObject.close() 
-    input('通讯录VCF文件已经保存！')
+    print('一个通讯录VCF文件任务已经保存！')
+
+    
